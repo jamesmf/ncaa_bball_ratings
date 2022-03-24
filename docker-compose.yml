@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  training:
+    image: ratings:latest
+    tty: true
+    volumes:
+      - ./:/app/ratings/
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [ gpu ]
+    ports:
+      - 8888:8888
+      - 5000:5000
+    command: python -m notebook --allow-root --ip 0.0.0.0 --no-browser
