@@ -12,7 +12,19 @@ services:
           devices:
             - driver: nvidia
               capabilities: [ gpu ]
+    # environment:
+    # # doesn't seem to work - could investigate JAX backend
+    #   - AESARA_FLAGS=device=cuda,floatX=float32
     ports:
       - 8888:8888
       - 5000:5000
     command: python -m notebook --allow-root --ip 0.0.0.0 --no-browser
+
+  dashapp:
+    image: dash-app:latest
+    volumes:
+      - ./power_ratings/:/app/power_ratings/
+      - ./output/:/app/output_data/
+    ports:
+      - 9999:9999
+    command: gunicorn --bind 0.0.0.0:9999 power_ratings.dash.app:server

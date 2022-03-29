@@ -1,0 +1,12 @@
+FROM python:3.9
+
+WORKDIR /app/
+
+COPY ./dash_req.txt /app/requirements.txt
+
+RUN python -m pip install -r /app/requirements.txt
+
+COPY ./power_ratings /app/power_ratings
+COPY ./output/ /app/output_data/
+
+CMD gunicorn power_ratings.dash.app:server
