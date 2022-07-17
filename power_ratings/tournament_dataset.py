@@ -7,6 +7,7 @@ import sklearn.linear_model
 import sklearn.ensemble
 import sklearn.preprocessing
 import sklearn.model_selection
+import scipy.stats
 import pandas as pd
 import numpy as np
 
@@ -31,6 +32,58 @@ def df_rename(df: pd.DataFrame, t1_prefix: str, t2_prefix: str):
     return df.rename(columns=renames)
 
 
+def prob_t1_score_gt_t2(
+    t1_off: float,
+    t1_def: float,
+    t2_off: float,
+    t2_def: float,
+    sigma1: float,
+    sigma2: float,
+    base: float,
+    scaler: float,
+) -> float:
+    """If we modeled the score distribution of one team
+    as Norm((t1_off - t2_def)*scaler + base, sigma), we
+    can get the distribution of t1_score - t2_score to
+    get a point estimate of how likely it is t1 wins
+    """
+    t1_score_mu = (t1_off - t2_def) * scaler + base
+    t2_score_mu = (t2_off - t1_def) * scaler + base
+    new_mean = t1_score_mu - t2_score_mu
+    new_sigma = np.sqrt(sigma1 ** 2 + sigma2 ** 2)
+    return 1 - scipy.stats.norm.cdf(0, new_mean, new_sigma)
+
+
+def probabilistic_estimate_df(
+    df: pd.DataFrame,
+    base: float,
+    scaler: float,
+) -> pd.Series:
+    """Use the probabilistic model we used to generate
+    the team off/def scores to get a point estimate of
+    the probability that team1 wins (has a higher score)
+
+    Args:
+        df (pd.DataFrame): tournament or submission df
+
+    Returns:
+        pd.Series: probabilities
+    """
+    return df.apply(
+        lambda x: prob_t1_score_gt_t2(
+            x["T1OffensiveRating"],
+            x["T1DefensiveRating"],
+            x["T2OffensiveRating"],
+            x["T2DefensiveRating"],
+            sigma1=x["T1ScoreVariance"],
+            sigma2=x["T2ScoreVariance"],
+            base=base,
+            scaler=scaler,
+        ),
+        axis=1,
+    )
+
+
 class MMadnessDataset:
     def __init__(
         self,
@@ -47,11 +100,21 @@ class MMadnessDataset:
         #     "EloWinLoss",
         #     "EloWithScore",
         # ],
+        extra_features: T.List[str] = [],
+        holdout_strategy: str = "all",
     ):
         self.holdout_seasons = holdout_seasons
-        self.extra_features = []
+        self.holdout_strategy = holdout_strategy
+        self.extra_features = extra_features
 
-        features_path = os.path.join(base_path, f"../output/{prefix}_data.csv")
+        if prefix == "M":
+            self.estimated_score_scaler = 0.59
+            self.estimated_score_base = 69.5
+        if prefix == "W":
+            self.estimated_score_scaler = 0.79
+            self.estimated_score_base = 64.0
+
+        features_path = os.path.join(base_path, f"../output/{prefix}_data_complete.csv")
         tourney_path = os.path.join(base_path, f"{prefix}NCAATourneyCompactResults.csv")
         sub_path = os.path.join(
             base_path, f"{prefix}SampleSubmissionStage{stage_num}.csv"
@@ -110,7 +173,7 @@ class MMadnessDataset:
         neg = df_rename(joined, "L", "W")
         neg["diff"] = -neg["diff"]
 
-        self.combined = pos.append(neg)
+        self.combined = pd.concat((pos, neg))
         self.combined["target"] = self.combined["diff"] > 0
 
         # now calculate "difference" features for all the core features
@@ -128,15 +191,55 @@ class MMadnessDataset:
             specific_df["elo2_diff"] = (
                 specific_df[f"T1EloWinLoss"] - specific_df[f"T2EloWinLoss"]
             )
+            specific_df["poss_eff_diff"] = (
+                specific_df[f"T1PossessionEfficiency"]
+                - specific_df[f"T2PossessionEfficiency"]
+            )
 
-        self.core_features = ["T1OD_diff", "T2OD_diff", "elo1_diff", "elo2_diff"]
+            # calculate our game-level "T1 wins" estimate from our probabilistic model
+            specific_df["T1WinsPMEstimate"] = probabilistic_estimate_df(
+                specific_df, self.estimated_score_base, self.estimated_score_scaler
+            )
+
+        self.core_features = [
+            "T1OD_diff",
+            "T2OD_diff",
+            "elo1_diff",
+            "elo2_diff",
+            "T1WinsPMEstimate",
+            "poss_eff_diff",
+        ]
 
     def get_mask(self, train=True):
+        """Return mask of the data based on the holdout and the holdout strategy.
+        If `train==True` then return the training data, else return the test set.
+
+        If `self.holdout_strategy == 'all'` then the training set is all years
+        not in `self.holdout_season`. If `self.holdout_strategy == 'prior'` then
+        return everything prior to the minimum year in `self.holdout_season`
+
+        Args:
+            train (bool, optional): whether to return the training set mask (vs test). Defaults to True.
+
+        Returns:
+            pd.Series: the boolean mask of the training or test set
+        """
         if self.holdout_seasons is None:
             return [True] * len(self.combined)
-        if train:
-            return ~self.combined.Season.isin(self.holdout_seasons)
-        return self.combined.Season.isin(self.holdout_seasons)
+        if self.holdout_strategy == "all":
+            if train:
+                return ~self.combined.Season.isin(self.holdout_seasons)
+            return self.combined.Season.isin(self.holdout_seasons)
+        elif self.holdout_strategy == "prior":
+            min_holdout = np.min(self.holdout_seasons)
+            prior = self.combined.Season < min_holdout
+            if train:
+                return (prior) & (~self.combined.Season.isin(self.holdout_seasons))
+            return self.combined.Season.isin(self.holdout_seasons)
+        else:
+            raise NotImplementedError(
+                "Only holdout strategies implemented are ('all', 'prior')"
+            )
 
     @property
     def X(self):

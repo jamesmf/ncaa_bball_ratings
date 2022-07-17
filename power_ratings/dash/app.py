@@ -31,6 +31,8 @@ plottable_cols = [
     "DefensiveRating",
     "EloWithScore",
     "EloWinLoss",
+    "PossessionEfficiency",
+    "TempoEstimate",
 ]
 graphs_per_row: int = 2
 
@@ -38,15 +40,15 @@ datasets = {}
 data_dir = "/app/output_data/"
 ls = os.listdir(data_dir)
 
-for fn in ls:
+for filename in ls:
     try:
-        path = os.path.join(data_dir, fn)
-        pref = fn[0]
+        path = os.path.join(data_dir, filename)
+        pref = filename[0]
         datasets[prefixes[pref]] = pd.read_csv(
             path, usecols=["Season", "TeamName"] + plottable_cols
         ).sort_values(["Season", sort_col], ascending=[False, False])
     except Exception as e:
-        logging.info(f"error loading dataset {fn}: {e}")
+        logging.info(f"error loading dataset {filename}: {e}")
 
 external_stylesheets = ["https://codepen.io/chriddyp/pen/bWLwgP.css", dbc.themes.GRID]
 
@@ -102,6 +104,25 @@ def get_graphs(df, graph_type: str, team: str):
                     name="min",
                 )
             )
+            desc = yearly.describe()[col]
+            lower_quartile = desc["25%"].values.tolist()
+            upper_quartile = desc["75%"].values.tolist()
+            logging.info(lower_quartile)
+            fig.add_trace(
+                go.Scatter(
+                    x=desc.index.values.tolist()
+                    + desc.index.values[::-1].tolist(),  # x, then x reversed
+                    y=upper_quartile
+                    + lower_quartile[::-1],  # upper, then lower reversed
+                    fill="toself",
+                    fillcolor="rgba(60,100,80,0.2)",
+                    line=dict(color="rgba(255,255,255,0)"),
+                    hoverinfo="skip",
+                    showlegend=True,
+                    name="interquartile",
+                )
+            )
+
             fig.update_layout(
                 title={"y": 0.9, "x": 0.5, "xanchor": "center", "yanchor": "top"}
             )
