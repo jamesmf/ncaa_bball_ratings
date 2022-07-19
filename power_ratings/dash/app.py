@@ -31,7 +31,7 @@ plottable_cols = [
     "DefensiveRating",
     "EloWithScore",
     "EloWinLoss",
-    "PossessionEfficiency",
+    "PossessionEfficiencyFactor",
     "TempoEstimate",
 ]
 graphs_per_row: int = 2
@@ -45,8 +45,10 @@ for filename in ls:
         path = os.path.join(data_dir, filename)
         pref = filename[0]
         datasets[prefixes[pref]] = pd.read_csv(
-            path, usecols=["Season", "TeamName"] + plottable_cols
+            path,  # usecols=["Season", "TeamName"] + plottable_cols
         ).sort_values(["Season", sort_col], ascending=[False, False])
+        if "TeamID" in datasets[prefixes[pref]].columns:
+            datasets[prefixes[pref]] = datasets[prefixes[pref]].drop(columns="TeamID")
     except Exception as e:
         logging.info(f"error loading dataset {filename}: {e}")
 
@@ -210,6 +212,7 @@ graph_input_row = html.Div(
                     clearable=False,
                     searchable=False,
                 ),
+                width={"offset": 2},
                 md=2,
             ),
             dbc.Col(
@@ -225,7 +228,7 @@ graph_input_row = html.Div(
                 md=2,
             ),
         ],
-        justify="center",
+        justify="left",
     ),
     id="graph-inputs-row",
     style={"display": "none"},
@@ -251,6 +254,11 @@ app.layout = html.Div(
                                 dcc.Link(
                                     "Data",
                                     href="https://www.kaggle.com/c/womens-march-mania-2022/data",
+                                ),
+                                " - ",
+                                dcc.Link(
+                                    "About",
+                                    href="https://github.com/jamesmf/ncaa_bball_ratings/blob/main/extra_md/definitions.md",
                                 ),
                             ],
                         ),
@@ -280,11 +288,17 @@ app.layout = html.Div(
                                     list(datasets.keys()),
                                     "NCAA Women",
                                     id="mw-dropdown",
+                                    searchable=False,
+                                    clearable=False,
                                 ),
                                 style={"margin": "auto"},
                             ),
-                            md=1,
+                            md=2,
                             width={"offset": 0},
+                        ),
+                        dbc.Col(
+                            html.Div(""),
+                            md=3,
                         ),
                         dbc.Col(
                             html.Div(
@@ -294,7 +308,7 @@ app.layout = html.Div(
                                 ),
                             ),
                             md=1,
-                            width={"offset": 4},
+                            width={"offset": 0},
                         ),
                     ],
                     align="top",
@@ -392,6 +406,8 @@ def display_value(tab_value, mw_value, graph_type_value, team_value):
                 },
                 fixed_columns={"headers": True, "data": 2},
                 style_cell=cell_style,
+                filter_action="native",
+                sort_action="native",
             ),
         )
 
