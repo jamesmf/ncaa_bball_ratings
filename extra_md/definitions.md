@@ -10,7 +10,7 @@ For the features generated in this section, we use `pymc` to generate a probabil
 points scored in a game as a function of a team's offense, the opponent's defense, and the variance in a team's natural game-to-game offensive performance.
 
 To get our dataset, we take all regular season games, remove games with 3 or more overtimes, and subtract from each team's score a fixed number of points
-for each overtime. This is a notable difference from [PossessionEfficiencyFactor](#posessionefficiencyfactor) which normalizes differently.
+for each overtime. This is a notable difference from [PossessionEfficiencyFactor](#possessionefficiencyfactor) which normalizes differently.
 
 ```python
 t1_score = pm.Deterministic(
@@ -42,6 +42,10 @@ The `DefensiveRating` is the second part of the probabilistic model outlined abo
 
 This is simply a team's `OffensiveRating + DefensiveRating`. Useful for sorting and the difference between two team's `CombinedRating` makes a strong simplistic baseline model.
 
+#### ScoreVariance
+
+This value estimates how much a team's performance varies when playing two teams with the same [DefensiveRating](#defensiverating)
+
 _____________
 
 ### Elo Features
@@ -61,6 +65,8 @@ _____________
 ### Other Features
 
 The rest of the features aren't grouped neatly, but are either features others have had success with or are simply interesting.
+
+Note that the years for which each feature is provided is a function of which datasets Kaggle has provided per year (the `WNCAARegularSeasonDetailedResults` don't go back past 2010).
 
 #### PossessionEfficiencyFactor
 
