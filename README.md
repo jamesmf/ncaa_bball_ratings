@@ -1,4 +1,6 @@
-## NCAA Basketball Ratings using pymc3
+## NCAA Basketball Ratings using pymc
+
+To see the predictions, check [the dash app](https://power-ratings-jamesmf.koyeb.app/)
 
 This repo implements a simple offensive/defensive rating system to be used with the Kaggle NCAA Basketball competitions. The rankings
 come from only the regular season games, matching what is provided by Kaggle yearly. This is to make them more useful for predicting
