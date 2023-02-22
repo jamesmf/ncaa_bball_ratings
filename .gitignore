@@ -3,3 +3,5 @@
 data/
 output/
 archived/
+.mypy_cache/
+mlruns/

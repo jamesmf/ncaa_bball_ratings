@@ -21,10 +21,20 @@ services:
     command: python -m notebook --allow-root --ip 0.0.0.0 --no-browser
 
   dashapp:
-    image: dash-app:latest
+    image: ghcr.io/jamesmf/power-ratings-dash:20230221
     volumes:
       - ./power_ratings/:/app/power_ratings/
       - ./output/:/app/output_data/
     ports:
       - 9999:9999
-    command: gunicorn --bind 0.0.0.0:9999 power_ratings.dash.app:server
+      - 8050:8050
+    # command: gunicorn --bind 0.0.0.0:9999 power_ratings.dash.app:server
+    command: python power_ratings/dash/app.py
+  # mlflow-server:
+  #   image: ratings:latest
+  #   tty: true
+  #   volumes:
+  #     - ./:/app/mtgradient/
+  #   ports:
+  #     - 5000:5000
+  #   command: mlflow ui --host 0.0.0.0

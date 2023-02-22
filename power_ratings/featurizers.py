@@ -124,8 +124,10 @@ class FeatureBase:
         )
         initial_ratings: T.Dict[str, int] = {}
         all_ratings: T.Dict[str, int] = {}
+        three_week_ratings: T.Dict[str, int] = {}  # ratings 21 days prior to season end
         years = sorted(self.season_df.Season.unique())
         for year_ind, year in enumerate(years):
+            reached_recent_cutoff = False
             elo = Elo(
                 k=k,
                 players=[t for t in teams if t[:4] == str(year)],
@@ -133,15 +135,21 @@ class FeatureBase:
                 verbose=self.elo_verbose,
                 last_season=initial_ratings,
             )
+            max_day = self.season_df[self.season_df.Season == year].DayNum.max()
             for row in (
                 self.season_df[
                     (self.season_df.DayNum > min_day_num)
                     & (self.season_df.Season == year)
                 ]
-                .sort_values("DayNum")[["Season", "WTeamID", "LTeamID", "WPt_diff"]]
+                .sort_values("DayNum")[
+                    ["Season", "DayNum", "WTeamID", "LTeamID", "WPt_diff"]
+                ]
                 .values
             ):
-                season, wteam, lteam, score = row
+                season, daynum, wteam, lteam, score = row
+                if daynum > (max_day - 21) and not reached_recent_cutoff:
+                    reached_recent_cutoff = True
+                    three_week_ratings.update(elo.ratings.copy())
                 winner = f"{season}_{wteam}"
                 loser = f"{season}_{lteam}"
                 elo.observe_game(winner, loser, score=score)
@@ -154,14 +162,14 @@ class FeatureBase:
             # if self.elo_verbose:
             #     print(f"completed elo for season {year}")
             #     print(sorted(elo.ratings.items(), key=lambda x: x[1]))
-        return all_ratings
+        return all_ratings, three_week_ratings
 
     def get_elo_feature_df(self) -> pd.DataFrame:
         data = []
         for k in self.elo_ks:
             for min_day_num in self.min_day_nums:
                 for use_score in (True, False):
-                    ratings = self.get_elo(
+                    ratings, three_week_ratings = self.get_elo(
                         k, min_day_num=min_day_num, use_score=use_score
                     )
                     for key, rating in ratings.items():
@@ -173,8 +181,20 @@ class FeatureBase:
                             rating,
                         ]
                         data.append(row)
+                        three_weeks_ago_elo = three_week_ratings.get(key, rating)
+                        three_week_diff = rating - three_weeks_ago_elo
+                        data.append(
+                            [
+                                int(season),
+                                int(team_id),
+                                f"elo_{k}_day{min_day_num}_{use_score}_21d_diff",
+                                three_week_diff,
+                            ]
+                        )
+
         df = pd.DataFrame(data, columns=["Season", "TeamID", "col", "rating"])
         df = df.pivot(index=["Season", "TeamID"], columns=["col"])["rating"]
+        print(df.columns)
         return df
 
     def get_elo_adjusted_game_features(self) -> pd.DataFrame:

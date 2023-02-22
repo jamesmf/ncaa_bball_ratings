@@ -3,7 +3,5 @@ aesara==2.7.3
 plotly==5.6.0
 jupyter==1.0.0
 pandas==1.4.1
-nb-black==1.0.7
 scikit-learn==1.1.1
-mlflow==1.24.0
-protobuf<=3.20.0
+mlflow==2.1.1 

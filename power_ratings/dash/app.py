@@ -1,6 +1,8 @@
 import logging
 import typing as T
 import re
+import datetime
+import json
 
 from dash import Dash, dcc, html, Input, Output, dash_table, State
 import dash_bootstrap_components as dbc
@@ -31,6 +33,7 @@ plottable_cols = [
     "DefensiveRating",
     "EloWithScore",
     "EloWinLoss",
+    "EloDelta21Days",
     "PossessionEfficiencyFactor",
     "TempoEstimate",
 ]
@@ -39,6 +42,18 @@ graphs_per_row: int = 2
 datasets = {}
 data_dir = "/app/output_data/"
 ls = os.listdir(data_dir)
+try:
+    with open("output_data/build_data.json", "r") as f:
+        build_data = json.load(f)
+        date = build_data["build_date"]
+        data_data = build_data["data_date"]
+except Exception as e:
+    date = datetime.date(2023, 2, 17).strftime("%Y-%m-%d")
+    data_data = ""
+    date = e
+
+years_set = set()
+
 
 for filename in ls:
     try:
@@ -49,8 +64,11 @@ for filename in ls:
         ).sort_values(["Season", sort_col], ascending=[False, False])
         if "TeamID" in datasets[prefixes[pref]].columns:
             datasets[prefixes[pref]] = datasets[prefixes[pref]].drop(columns="TeamID")
+        years_set.update(datasets[prefixes[pref]].Season.unique().tolist())
     except Exception as e:
         logging.info(f"error loading dataset {filename}: {e}")
+
+years = sorted(list(years_set))
 
 external_stylesheets = ["https://codepen.io/chriddyp/pen/bWLwgP.css", dbc.themes.GRID]
 
@@ -164,7 +182,9 @@ def func(n_clicks, value):
     f = StringIO()
     df.to_csv(f, index=False)
     f.seek(0)
-    return dict(content=f.read(), filename=f"{value}_jamesmf_ratings.csv")
+    return dict(
+        content=f.read(), filename=f"{value.replace(' ', '_')}_jamesmf_ratings.csv"
+    )
 
 
 # callback to make the graph-specific input row hidden/shown
@@ -212,7 +232,7 @@ graph_input_row = html.Div(
                     clearable=False,
                     searchable=False,
                 ),
-                width={"offset": 2},
+                width={"offset": 0},
                 md=2,
             ),
             dbc.Col(
@@ -228,7 +248,7 @@ graph_input_row = html.Div(
                 md=2,
             ),
         ],
-        justify="left",
+        justify="center",
     ),
     id="graph-inputs-row",
     style={"display": "none"},
@@ -243,28 +263,57 @@ app.layout = html.Div(
                     html.H2("jamesmf power ratings", style={"text-align": "center"}),
                 ),
                 dbc.Row(
+                    dcc.Markdown(f"Last Updated: {date} {data_data}"),
+                    style={"text-align": "center"},
+                ),
+                dbc.Row(
                     [
                         dbc.Col(
                             [
                                 dcc.Link(
                                     "Code",
                                     href="https://github.com/jamesmf/ncaa_bball_ratings",
+                                    target="_blank",
                                 ),
                                 " - ",
                                 dcc.Link(
                                     "Data",
                                     href="https://www.kaggle.com/c/womens-march-mania-2022/data",
+                                    target="_blank",
                                 ),
                                 " - ",
                                 dcc.Link(
                                     "About",
                                     href="https://github.com/jamesmf/ncaa_bball_ratings/blob/main/extra_md/definitions.md",
+                                    target="_blank",
                                 ),
                             ],
                         ),
                     ],
                     style={"text-align": "center"},
                 ),
+                dbc.Row([html.Div("", style={"height": "10px"})]),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            dcc.RangeSlider(
+                                np.min(years),
+                                np.max(years),
+                                id="year-dropdown",
+                                marks={i: f"{i}" for i in (years[0], years[-1])},
+                                value=[np.max(years) - 0.01, np.max(years)],
+                                step=1.0,
+                                dots=False,
+                                tooltip={"placement": "top", "always_visible": False},
+                            ),
+                            md=4,
+                            sm=8,
+                        )
+                    ],
+                    align="top",
+                    justify="center",
+                ),
+                dbc.Row([html.Div("", style={"height": "10px"})]),
                 dbc.Row(
                     [
                         dbc.Col(
@@ -278,7 +327,7 @@ app.layout = html.Div(
                                 ),
                             ),
                             md=2,
-                            sm=6,
+                            sm=4,
                             width={"offset": 0},
                             style=tabs_styles,
                         ),
@@ -294,12 +343,18 @@ app.layout = html.Div(
                                 style={"margin": "auto"},
                             ),
                             md=2,
+                            sm=4,
                             width={"offset": 0},
                         ),
-                        dbc.Col(
-                            html.Div(""),
-                            md=3,
-                        ),
+                    ],
+                    align="top",
+                    justify="center",
+                ),
+                dbc.Row([html.Div("", style={"height": "10px"})]),
+                graph_input_row,
+                dbc.Row([html.Div("", style={"height": "10px"})]),
+                dbc.Row(
+                    [
                         dbc.Col(
                             html.Div(
                                 dbc.Button(
@@ -311,11 +366,9 @@ app.layout = html.Div(
                             width={"offset": 0},
                         ),
                     ],
-                    align="top",
                     justify="center",
                 ),
                 dbc.Row([html.Div("", style={"height": "10px"})]),
-                graph_input_row,
                 dbc.Row(
                     [
                         dbc.Col(
@@ -358,8 +411,9 @@ def camel_split(x: str) -> str:
     Input("mw-dropdown", "value"),
     Input("graph-type-dropdown", "value"),
     Input("team-dropdown", "value"),
+    Input("year-dropdown", "value"),
 )
-def display_value(tab_value, mw_value, graph_type_value, team_value):
+def display_value(tab_value, mw_value, graph_type_value, team_value, year_value):
     df = datasets[mw_value]
 
     if tab_value == GRAPH_TAB:
@@ -390,6 +444,7 @@ def display_value(tab_value, mw_value, graph_type_value, team_value):
             ),
         )
     else:
+        df = df[df.Season.between(year_value[0] - 0.01, year_value[1] + 0.01)]
         datatable = (
             dash_table.DataTable(
                 df.to_dict("records"),
@@ -405,9 +460,25 @@ def display_value(tab_value, mw_value, graph_type_value, team_value):
                     "height": "60px",
                 },
                 fixed_columns={"headers": True, "data": 2},
-                style_cell=cell_style,
-                filter_action="native",
-                sort_action="native",
+                # style_cell=cell_style,
+                style_data_conditional=[
+                    {
+                        "if": {
+                            "filter_query": "{EloDelta21Days} > 0",
+                            "column_id": "EloDelta21Days",
+                        },
+                        "color": "darkgreen",
+                    },
+                    {
+                        "if": {
+                            "filter_query": "{EloDelta21Days} < 0",
+                            "column_id": "EloDelta21Days",
+                        },
+                        "color": "darkred",
+                    },
+                ]
+                # filter_action="native",
+                # sort_action="native",
             ),
         )
 
@@ -415,4 +486,4 @@ def display_value(tab_value, mw_value, graph_type_value, team_value):
 
 
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run_server(debug=False, host='0.0.0.0')

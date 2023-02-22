@@ -93,13 +93,6 @@ class MMadnessDataset:
         curr_year: int = 2022,
         stage_num: str = "2",
         holdout_seasons: T.Optional[T.List[int]] = None,
-        # core_features=[
-        #     "CombinedRating",
-        #     "OffensiveRating",
-        #     "DefensiveRating",
-        #     "EloWinLoss",
-        #     "EloWithScore",
-        # ],
         extra_features: T.List[str] = [],
         holdout_strategy: str = "all",
     ):
@@ -116,9 +109,10 @@ class MMadnessDataset:
 
         features_path = os.path.join(base_path, f"../output/{prefix}_data_complete.csv")
         tourney_path = os.path.join(base_path, f"{prefix}NCAATourneyCompactResults.csv")
-        sub_path = os.path.join(
-            base_path, f"{prefix}SampleSubmissionStage{stage_num}.csv"
-        )
+        sub_path = os.path.join(base_path, "SampleSubmission2023.csv")
+        # sub_path = os.path.join(
+        #     base_path, f"{prefix}SampleSubmissionStage{stage_num}.csv"
+        # )
         seed_path = os.path.join(base_path, f"{prefix}NCAATourneySeeds.csv")
         team_name_path = os.path.join(base_path, f"{prefix}Teams.csv")
 
@@ -192,8 +186,8 @@ class MMadnessDataset:
                 specific_df[f"T1EloWinLoss"] - specific_df[f"T2EloWinLoss"]
             )
             specific_df["poss_eff_diff"] = (
-                specific_df[f"T1PossessionEfficiency"]
-                - specific_df[f"T2PossessionEfficiency"]
+                specific_df[f"T1PossessionEfficiencyFactor"]
+                - specific_df[f"T2PossessionEfficiencyFactor"]
             )
 
             # calculate our game-level "T1 wins" estimate from our probabilistic model
