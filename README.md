@@ -10,7 +10,7 @@ The approximate function we're estimating looks like this:
 
 ```python 
 s = offense[t1_idx] - defense[t2_idx]) * scaler + base
-score = Normal(mu=s, sigma=constant)
+score = Normal(mu=s, sigma=score_variance[t1_idx])
 ```
 
 There are a number of other formulations that we could explore, but this approach produces a strong but not 1:1 rank-correlation
@@ -31,14 +31,14 @@ kendalltau(offensive_ratings+defensive_ratings, elo_features): KendalltauResult(
 
 ![Estimates of base and scale for 2022](img/base_and_scale_trace.png)
 
-Above is an estimate for the base score and scaling factor. That means that the most likely score estimate is about `(T1Off - T2Def)*0.59 + 69.5`
+Above is an estimate for the base score and scaling factor. That means that the most likely score estimate for the NCAAM dataset is about `(T1Off - T2Def)*0.59 + 69.5`
 
 ![Estimates of offense and defense](img/off_def_trace.png)
 
-Above is a plot of the estimated offense and defense ratings for every team.
+Above is a plot of the estimated offense and defense ratings for every NCAAM team.
 
 
-### Scaling
+### Fixed Parameters
 
 Some of the features of the modeling pipeline are memory-inefficient, so modeling all of the years at once tends to be impractical. To keep the 
 scores similar, though, we model a running set of 3 years and keep only the last one. So the 2012 ratings come from modeling 2010, 2011, and 2012,
