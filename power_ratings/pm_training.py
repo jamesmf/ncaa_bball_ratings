@@ -14,42 +14,25 @@ from sklearn.linear_model import LinearRegression
 
 
 from .featurizers import FeatureBase
-from .tournament_dataset import df_rename, feature_rename
-
+from .tournament_dataset import df_rename, feature_rename, probabilistic_estimate_df
+from .constants import M_PRE_SCALER, M_PRE_BASE, W_PRE_SCALER, W_PRE_BASE, OVERTIME_SCORE_BONUS
 
 logging.basicConfig()
 # some assumptions gleaned from prior data analysis
 
-# an overtime adds about 7-9 points on average
-OVERTIME_SCORE_BONUS = 7.4
 
 # if we want to use predetermined values instead of distributions,
 # we can set this flag
 USE_PREDETERMINED = True
 
 
-M_PRE_SCALER = 0.59
-M_PRE_BASE = 69.5
-W_PRE_SCALER = 0.79
-W_PRE_BASE = 64.0
-
-# params = {
-#     "overtime_score_discount": OVERTIME_SCORE_BONUS,
-#     "season": f"[{','.join([str(i) for i in SEASONS])}]",
-#     "data_prefix": DATA_PREFIX,
-#     "use_predetermined": USE_PREDETERMINED,
-#     "pre_scaler": pre_scaler,
-#     "pre_base": pre_base,
-# }
-
-
 def get_season_list():
-    return sorted(list(range(2000, 2024)), reverse=True)
+    return sorted(list(range(1998, 2024)), reverse=True)
 
 
 def read_in_data(
-    prefix: str, seasons: T.Optional[T.List[int]] = None
-) -> T.Tuple[pd.DataFrame, pd.DataFrame]:
+    prefix: str, seasons: T.Optional[T.List[int]] = None, starting_daynum: int = 1
+) -> T.Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
     if seasons is None:
         seasons = get_season_list()
@@ -59,9 +42,10 @@ def read_in_data(
     teamnames = pd.read_csv(f"data/{prefix}Teams.csv")
     elo_df = feature_base.elo_features.reset_index()
     elo_df["elo"] = elo_df["elo_32_day0_True"]
-    elo_df["elo_delta"] = elo_df["elo_32_day0_True_21d_diff"]
+    elo_df["elo_delta"] = elo_df["elo_32_day30_True_21d_diff"]
 
     games_df = games_df[games_df.Season.isin(seasons)]
+    games_df = games_df[games_df.DayNum >= starting_daynum]
     games_df = pd.merge(
         games_df,
         elo_df,
@@ -132,6 +116,7 @@ def train_model(
     t1_idx, teams = pd.factorize(games_df["T1TeamID"], sort=True)
     t2_idx, _ = pd.factorize(games_df["T2TeamID"], sort=True)
     game_ids = games_df.index.values
+    # home = games_df.T1Home.values
 
     # shape of this is taken from Rugby Analytics example here:
     # https://oriolabril.github.io/oriol_unraveled/python/arviz/pymc3/xarray/2020/09/22/pymc3-arviz.html
@@ -142,20 +127,44 @@ def train_model(
         t1 = pm.Data("t1", t1_idx, dims="game", mutable=True)
         t2 = pm.Data("t2", t2_idx, dims="game", mutable=True)
 
-        off_sigma, def_sigma = 10, 10
+        # keeping this static simplifies other equations, but if ever it
+        # needs to be tuned because other variables have changed, uncomment
+        # the Uniform and try another run to get a reasonable value. In past
+        # runs, it has remained fairly tight
+        off_def_sigma = 10
+        # off_def_sigma = pm.Uniform("off_def_sigma", lower=7, upper=9)
+
+        # team_score_sigma_mu = pm.Uniform("team_score_sigma_mu", lower=5, upper=15)
+        team_score_sigma_mu = 9.5
+        team_score_sigma_sigma = 2
+        # team_score_sigma_sigma = pm.Uniform("team_score_sigma_sigma", lower=0.5, upper=10)
+        off_def_rank_mu = 50
+        # off_def_rank_mu = pm.Normal("off_def_rank_mu", mu=35, sigma=4)
 
         # team-specific model parameters
-        offense = pm.Normal("offense", mu=50, sigma=off_sigma, dims="team")
-        defense = pm.Normal("defense", mu=50, sigma=def_sigma, dims="team")
-        team_score_sigma = pm.Normal("team_score_sigma", mu=9.5, sigma=2, dims="team")
+        offense = pm.Normal(
+            "offense", mu=off_def_rank_mu, sigma=off_def_sigma, dims="team"
+        )
+        defense = pm.Normal(
+            "defense", mu=off_def_rank_mu, sigma=off_def_sigma, dims="team"
+        )
+        team_score_sigma = pm.Normal(
+            "team_score_sigma",
+            mu=team_score_sigma_mu,
+            sigma=team_score_sigma_sigma,
+            dims="team",
+        )
+        # home_court_adv = pm.Uniform("home_court_adv", lower=2, upper=4)
 
         if not USE_PREDETERMINED:
-            scaler = pm.Normal("scaler", mu=0.5, sigma=0.3)
-            base = pm.Normal("base", mu=mean_game_score - 5, sigma=2)
+            scaler = pm.Uniform("scaler", lower=0.55, upper=0.7)
+            # base = pm.Uniform("base", lower=mean_game_score -5 , upper=mean_game_score)
+            base = pre_base  # just use it, since it's so consistent
         else:
             scaler = pre_scaler
             base = pre_base
 
+        # (offense[t1_idx] - defense[t2_idx]) * scaler + base + home_court_adv*home
         t1_score = pm.Deterministic(
             "score", (offense[t1_idx] - defense[t2_idx]) * scaler + base
         )
@@ -172,7 +181,7 @@ def train_model(
 
         trace = pm.sample(
             750,
-            tune=1000,
+            tune=3000,
             cores=11,
             return_inferencedata=True,
             target_accept=0.9,
@@ -182,6 +191,12 @@ def train_model(
 
 def get_ratings_df(trace: az.data.inference_data.InferenceData) -> pd.DataFrame:
     trace_hdi = az.hdi(trace, hdi_prob=0.9)
+    for variable in ("home_court_adv", "off_def_sigma", "scaler", "base"):
+        try:
+            print(f"{variable}: {trace_hdi[variable].values}")
+        except:
+            pass
+
     ratings_df = pd.DataFrame(
         list(
             zip(
@@ -273,8 +288,10 @@ def join_datasets(
 
     joined = joined.rename(
         columns={
-            "elo_32_day30_True": "EloWithScore",
+            "elo_32_day0_True": "EloWithScore",
             "elo_32_day0_False": "EloWinLoss",
+            "elo_64_day30_True": "EloDay30WithScore",
+            "elo_64_day30_False": "EloDay30WinLoss",
             "elo_delta": "EloDelta21Days",
         }
     )
@@ -291,6 +308,8 @@ def join_datasets(
             "EloWithScore",
             "EloWinLoss",
             "EloDelta21Days",
+            "EloDay30WithScore",
+            "EloDay30WinLoss",
         ]
     ].copy()
     float_cols = output_df.select_dtypes(float).columns
@@ -305,8 +324,6 @@ def get_df_for_eff(prefix: str):
     existing_feature_df = pd.read_csv(
         f"data/{prefix}_data_interim.csv",
     ).set_index(["Season", "TeamID"])
-    print(detailed_df)
-    print(existing_feature_df)
     df_for_eff = pd.merge(
         detailed_df,
         feature_rename(existing_feature_df, "W"),
@@ -314,7 +331,7 @@ def get_df_for_eff(prefix: str):
         left_on=["Season", "WTeamID"],
         right_index=True,
     )
-    print(df_for_eff)
+
     df_for_eff = pd.merge(
         df_for_eff,
         feature_rename(existing_feature_df, "L"),
@@ -322,11 +339,10 @@ def get_df_for_eff(prefix: str):
         left_on=["Season", "LTeamID"],
         right_index=True,
     )
-    print(df_for_eff)
+
     pos = df_rename(df_for_eff, "W", "L")
     neg = df_rename(df_for_eff, "L", "W")
     df_for_eff = pd.concat((pos, neg))
-    print(df_for_eff)
 
     df_for_eff["ApproxPoss"] = df_for_eff.apply(
         lambda x: (
@@ -379,7 +395,7 @@ def create_pace_feature(df: pd.DataFrame, team_id_map: T.Dict[int, int]):
     return pd.DataFrame(pace_data, columns=["Season", "TeamID", "TempoEstimate"])
 
 
-def create_est_pts_per_poss_feature(df: pd.DataFrame, team_id_map: T.Dict[int, int]):
+def create_est_pts_per_poss_feature(df: pd.DataFrame, team_id_map: T.Dict[str, int]):
     data, rows, cols, y = [], [], [], []
     n_teams = len(team_id_map)
     n = 0
@@ -410,8 +426,65 @@ def create_est_pts_per_poss_feature(df: pd.DataFrame, team_id_map: T.Dict[int, i
     )
 
 
+def create_win_prob_features(
+    input_df: pd.DataFrame, prefix: str, n: int = 16
+) -> pd.DataFrame:
+    orig_df = input_df.reset_index()
+    offensive_good_team_rating = (
+        orig_df.groupby("Season")["OffensiveRating"]
+        .agg(lambda x: sorted(x, reverse=True)[n])
+        .reset_index()
+        .rename(columns={"OffensiveRating": "T2OffensiveRating"})
+    )
+    defensive_good_team_rating = (
+        orig_df.groupby("Season")["DefensiveRating"]
+        .agg(lambda x: sorted(x, reverse=True)[n])
+        .reset_index()
+        .rename(columns={"DefensiveRating": "T2DefensiveRating"})
+    )
+    score_variance = orig_df.ScoreVariance.median()
+
+    df_for_combined_rating = orig_df[
+        [
+            "TeamID",
+            "TeamName",
+            "Season",
+            "CombinedRating",
+            "OffensiveRating",
+            "DefensiveRating",
+            "ScoreVariance",
+        ]
+    ].rename(
+        columns={
+            "OffensiveRating": "T1OffensiveRating",
+            "DefensiveRating": "T1DefensiveRating",
+            "ScoreVariance": "T1ScoreVariance",
+        }
+    )
+    df_for_combined_rating = pd.merge(
+        df_for_combined_rating, offensive_good_team_rating, how="left", on="Season"
+    )
+    df_for_combined_rating = pd.merge(
+        df_for_combined_rating, defensive_good_team_rating, how="left", on="Season"
+    )
+    df_for_combined_rating["T2ScoreVariance"] = score_variance
+    if prefix == "W":
+        df_for_combined_rating["WinProbAgainstGoodTeam"] = probabilistic_estimate_df(
+            df_for_combined_rating, base=W_PRE_BASE, scaler=W_PRE_SCALER
+        )
+    else:
+        df_for_combined_rating["WinProbAgainstGoodTeam"] = probabilistic_estimate_df(
+            df_for_combined_rating, base=M_PRE_BASE, scaler=M_PRE_SCALER
+        )
+    return df_for_combined_rating[
+        ["Season", "TeamID", "WinProbAgainstGoodTeam"]
+    ].rename(columns={"WinProbAgainstGoodTeam": f"WP{n}"})
+
+
 def get_full_features(
-    df_for_eff: pd.DataFrame, existing_feature_df: pd.DataFrame
+    df_for_eff: pd.DataFrame,
+    existing_feature_df: pd.DataFrame,
+    prefix: str,
 ) -> pd.DataFrame:
     team_map = {}
     for team in (
@@ -423,6 +496,9 @@ def get_full_features(
 
     pace_df = create_pace_feature(df_for_eff, team_map)
     pts_per_poss_df = create_est_pts_per_poss_feature(df_for_eff, team_map)
+    wp_features = create_win_prob_features(existing_feature_df, prefix).set_index(
+        ["Season", "TeamID"]
+    )
     new_features = pd.merge(
         existing_feature_df,
         pts_per_poss_df,
@@ -437,6 +513,14 @@ def get_full_features(
         how="left",
         right_on=["Season", "TeamID"],
         left_index=True,
+        suffixes=("_old", ""),
+    )
+    new_features = pd.merge(
+        new_features,
+        wp_features,
+        how="left",
+        right_index=True,
+        left_on=["Season", "TeamID"],
         suffixes=("_old", ""),
     )
     return new_features

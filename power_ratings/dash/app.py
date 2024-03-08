@@ -29,6 +29,7 @@ prefixes = {
 sort_col = "CombinedRating"
 plottable_cols = [
     "CombinedRating",
+    "WP16",
     "OffensiveRating",
     "DefensiveRating",
     "EloWithScore",
@@ -55,15 +56,19 @@ except Exception as e:
 years_set = set()
 
 
-for filename in ls:
+for pref in prefixes:
+    filename = f"{pref}_data_complete.csv"
     try:
         path = os.path.join(data_dir, filename)
-        pref = filename[0]
         datasets[prefixes[pref]] = pd.read_csv(
             path,  # usecols=["Season", "TeamName"] + plottable_cols
         ).sort_values(["Season", sort_col], ascending=[False, False])
         if "TeamID" in datasets[prefixes[pref]].columns:
             datasets[prefixes[pref]] = datasets[prefixes[pref]].drop(columns="TeamID")
+        if "WP16" in datasets[prefixes[pref]].columns:
+            datasets[prefixes[pref]]["WP16"] = np.round(
+                datasets[prefixes[pref]]["WP16"].values, 2
+            )
         years_set.update(datasets[prefixes[pref]].Season.unique().tolist())
     except Exception as e:
         logging.info(f"error loading dataset {filename}: {e}")
@@ -278,7 +283,7 @@ app.layout = html.Div(
                                 " - ",
                                 dcc.Link(
                                     "Data",
-                                    href="https://www.kaggle.com/c/womens-march-mania-2022/data",
+                                    href="https://www.kaggle.com/competitions/march-machine-learning-mania-2023/data",
                                     target="_blank",
                                 ),
                                 " - ",
@@ -458,9 +463,19 @@ def display_value(tab_value, mw_value, graph_type_value, team_value, year_value)
                     "backgroundColor": "rgb(210, 210, 210)",
                     "color": "black",
                     "height": "60px",
+                    "maxWidth": "50px",
+                    "minWidth": "30px",
+                    "whiteSpace": "normal",
                 },
                 fixed_columns={"headers": True, "data": 2},
-                # style_cell=cell_style,
+                style_cell={
+                    "maxWidth": "50px",
+                    "minWidth": "30px",
+                },
+                style_data={
+                    "whiteSpace": "normal",
+                    "height": "auto",
+                },
                 style_data_conditional=[
                     {
                         "if": {
@@ -486,4 +501,4 @@ def display_value(tab_value, mw_value, graph_type_value, team_value, year_value)
 
 
 if __name__ == "__main__":
-    app.run_server(debug=False, host='0.0.0.0')
+    app.run_server(debug=False, host="0.0.0.0")

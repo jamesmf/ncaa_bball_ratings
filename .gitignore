@@ -4,4 +4,5 @@ data/
 output/
 archived/
 .mypy_cache/
-mlruns/
+mlruns*
+lightning_logs/

@@ -8,5 +8,8 @@ RUN python -m pip install -r /app/requirements.txt
 
 COPY ./power_ratings /app/power_ratings
 COPY ./output/ /app/output_data/
+COPY setup.py .
 
-CMD gunicorn power_ratings.dash.app:server
+RUN python -m pip install .
+
+CMD gunicorn --bind 0.0.0.0:8000 power_ratings.dash.app:server

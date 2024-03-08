@@ -6,30 +6,38 @@ services:
     tty: true
     volumes:
       - ./:/app/ratings/
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              capabilities: [ gpu ]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           capabilities: [ gpu ]
     # environment:
     # # doesn't seem to work - could investigate JAX backend
     #   - AESARA_FLAGS=device=cuda,floatX=float32
     ports:
       - 8888:8888
+    command: python -m notebook --allow-root --ip 0.0.0.0 --no-browser --NotebookApp.token=bballbuddies
+  
+  mlflow:
+    image: ratings:latest
+    volumes:
+      - ./:/app/ratings/
+    ports:
       - 5000:5000
-    command: python -m notebook --allow-root --ip 0.0.0.0 --no-browser
+    command: mlflow server --backend-store-uri sqlite:///mlflow.db --host 0.0.0.0
 
   dashapp:
-    image: ghcr.io/jamesmf/power-ratings-dash:20230221
+    image: ghcr.io/jamesmf/power-ratings-dash:202300306
     volumes:
       - ./power_ratings/:/app/power_ratings/
       - ./output/:/app/output_data/
     ports:
       - 9999:9999
       - 8050:8050
-    # command: gunicorn --bind 0.0.0.0:9999 power_ratings.dash.app:server
-    command: python power_ratings/dash/app.py
+      - 8001:8000
+    # command: gunicorn --bind 0.0.0.0:8000 power_ratings.dash.app:server
+    # command: python power_ratings/dash/app.py
   # mlflow-server:
   #   image: ratings:latest
   #   tty: true

@@ -50,15 +50,19 @@ _____________
 
 ### Elo Features
 
-The two Elo features follow a number of the suggestions about calculating Elo scores [from fivethirtyeight](https://fivethirtyeight.com/features/how-our-2015-16-nba-predictions-work/). There are a number of hyperparameters you could choose, like whether Elo ratings roll over each season, whether the end of the season matters more, the value of `k`, etc. These are just two of the combinations that worked well in downstream models.
+The two Elo features follow a number of the suggestions about calculating Elo ratings [from fivethirtyeight](https://fivethirtyeight.com/features/how-our-2015-16-nba-predictions-work/). There are a number of hyperparameters you could choose, like whether Elo ratings roll over each season, whether the end of the season matters more, the value of `k`, etc. These are just two of the combinations that worked well in downstream models.
 
 #### EloWithScore
 
-This value is calculated starting from the first season and rolling over a team's Elo score year-to-year. The update function takes into account score as well, so beating a team by 30 is far better than beating them by 1.
+This value is calculated starting from the first season and rolling over a team's Elo rating year-to-year. The update function takes into account score as well, so beating a team by 30 is far better than beating them by 1.
 
 #### EloWinLoss
 
-This value is calculated starting from the first season and rolling over a team's Elo score year-to-year. The update function ignores score.
+This value is calculated starting from the first season and rolling over a team's Elo rating year-to-year. The update function ignores game score.
+
+#### EloDelta21Days
+	
+This is the EloWithScore value 21 days prior to the last day's worth of data for the team. As such it reflects change in Elo rating over the last 3 weeks.
 
 _____________
 

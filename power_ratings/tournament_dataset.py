@@ -4,6 +4,8 @@ import time
 
 import sklearn
 import sklearn.linear_model
+import sklearn.pipeline
+import sklearn.impute
 import sklearn.ensemble
 import sklearn.preprocessing
 import sklearn.model_selection
@@ -11,6 +13,7 @@ import scipy.stats
 import pandas as pd
 import numpy as np
 
+from .constants import M_PRE_BASE, M_PRE_SCALER, W_PRE_BASE, W_PRE_SCALER
 
 def feature_rename(df: pd.DataFrame, wl: str):
     """
@@ -53,6 +56,27 @@ def prob_t1_score_gt_t2(
     new_sigma = np.sqrt(sigma1 ** 2 + sigma2 ** 2)
     return 1 - scipy.stats.norm.cdf(0, new_mean, new_sigma)
 
+def score_sum_distribution(
+    t1_off: float,
+    t1_def: float,
+    t2_off: float,
+    t2_def: float,
+    sigma1: float,
+    sigma2: float,
+    base: float,
+    scaler: float,
+) -> T.List[float]:
+    """If we modeled the score distribution of one team
+    as Norm((t1_off - t2_def)*scaler + base, sigma), we
+    can get the distribution of t1_score - t2_score to
+    get a point estimate of how likely it is t1 wins
+    """
+    t1_score_mu = (t1_off - t2_def) * scaler + base
+    t2_score_mu = (t2_off - t1_def) * scaler + base
+    new_mean = t1_score_mu + t2_score_mu
+    new_sigma = np.sqrt(sigma1 ** 2 + sigma2 ** 2)
+    return [new_mean, *scipy.stats.norm.interval(0.25, new_mean, new_sigma)]
+
 
 def probabilistic_estimate_df(
     df: pd.DataFrame,
@@ -83,6 +107,119 @@ def probabilistic_estimate_df(
         axis=1,
     )
 
+def score_estimate_df(
+    df: pd.DataFrame,
+    base: float,
+    scaler: float,
+) -> T.Tuple[np.ndarray]:
+    """Use the probabilistic model we used to generate
+    the team off/def scores to get a point estimate of
+    the probability that team1 wins (has a higher score)
+
+    Args:
+        df (pd.DataFrame): tournament or submission df
+
+    Returns:
+        pd.Series: probabilities
+    """
+    result = np.array(df.apply(
+        lambda x: score_sum_distribution(
+            x["T1OffensiveRating"],
+            x["T1DefensiveRating"],
+            x["T2OffensiveRating"],
+            x["T2DefensiveRating"],
+            sigma1=x["T1ScoreVariance"],
+            sigma2=x["T2ScoreVariance"],
+            base=base,
+            scaler=scaler,
+        ),
+        axis=1,
+    ).tolist())
+    return result
+
+def seeds_to_round(x1, x2):
+    """
+    From the two seeds, infer the round. Uses seed naming similar to
+    Kaggle's dataset, W01, W02, ... Z16 with a/b for play-in
+    """
+    if str(x1) in ("nan", "none", "None"):
+        return 1
+    s1 = int(str(x1)[1:3])
+    s2 = int(str(x2)[1:3])
+    combined = sorted([s1, s2])
+    combined_str = f"{combined[0]}.{combined[1]}"
+    region_str = f"{'.'.join(sorted([x1[0], x2[0]]))}"
+
+    # cross-region matchups occur in round 5, 6
+    if region_str in (
+        "W.X",
+        "Y.Z",
+    ):
+        return 5
+    if region_str in ("W.Z", "W.Y", "X.Y", "X.Z"):
+        return 6
+
+    # playins are between evenly ranked teams
+    if s1 == s2:
+        return 0
+    if combined_str in ("1.16", "2.15", "3.14", "4.13", "5.12", "6.11", "7.10", "8.9"):
+        return 1
+    if combined_str in (
+        "1.8",
+        "1.9",
+        "8.16",
+        "9.16",
+        "4.5",
+        "4.12",
+        "5.13",
+        "12.13",
+        "3.6",
+        "3.11",
+        "6.14",
+        "11.14",
+        "2.7",
+        "2.10",
+        "7.15",
+        "10.15",
+    ):
+        return 2
+    if combined_str in (
+        "1.5",
+        "1.12",
+        "1.4",
+        "1.13",
+        "5.16",
+        "12.16",
+        "4.16",
+        "13.16",
+        "5.9",
+        "9.12",
+        "4.9",
+        "9.13",
+        "5.8",
+        "8.12",
+        "4.8",
+        "8.13",
+        "2.3",
+        "2.6",
+        "2.11",
+        "2.14",
+        "3.7",
+        "6.7",
+        "7.11",
+        "7.14",
+        "3.10",
+        "6.10",
+        "10.11",
+        "10.14",
+        "3.15",
+        "6.15",
+        "11.15",
+        "14.15",
+    ):
+        return 3
+    return 4
+
 
 class MMadnessDataset:
     def __init__(
@@ -90,8 +227,8 @@ class MMadnessDataset:
         base_path: str = "data/",
         prefix: str = "W",
         start_year: int = 2002,
-        curr_year: int = 2022,
-        stage_num: str = "2",
+        curr_year: int = 2023,
+        sample_weight_method: T.Literal["last_3", "linear"] = "linear",
         holdout_seasons: T.Optional[T.List[int]] = None,
         extra_features: T.List[str] = [],
         holdout_strategy: str = "all",
@@ -99,13 +236,15 @@ class MMadnessDataset:
         self.holdout_seasons = holdout_seasons
         self.holdout_strategy = holdout_strategy
         self.extra_features = extra_features
+        self.sample_weight_method = sample_weight_method
+        self.prefix = prefix
 
         if prefix == "M":
-            self.estimated_score_scaler = 0.59
-            self.estimated_score_base = 69.5
+            self.estimated_score_scaler = M_PRE_SCALER
+            self.estimated_score_base = M_PRE_BASE
         if prefix == "W":
-            self.estimated_score_scaler = 0.79
-            self.estimated_score_base = 64.0
+            self.estimated_score_scaler = W_PRE_SCALER
+            self.estimated_score_base = W_PRE_BASE
 
         features_path = os.path.join(base_path, f"../output/{prefix}_data_complete.csv")
         tourney_path = os.path.join(base_path, f"{prefix}NCAATourneyCompactResults.csv")
@@ -162,6 +301,24 @@ class MMadnessDataset:
             right_index=True,
             how="inner",
         )
+        self.submission = pd.merge(
+            self.submission,
+            self.seeds,
+            how="left",
+            left_on=["Team1ID", "Season"],
+            right_on=["TeamID", "Season"],
+        )
+        self.submission = pd.merge(
+            self.submission,
+            self.seeds,
+            how="left",
+            left_on=["Team2ID", "Season"],
+            right_on=["TeamID", "Season"],
+            suffixes=("_1", "_2"),
+        )
+        self.submission["T1Seed"] = self.submission["Seed_1"].fillna("").apply(lambda x: int(x[1:3]) if x and str(x) != 'nan' else 17)
+        self.submission["T2Seed"] = self.submission["Seed_2"].fillna("").apply(lambda x: int(x[1:3]) if x and str(x) != 'nan' else 17)
+        self.submission["round"] = self.submission[["Seed_1", "Seed_2"]].fillna("").apply(lambda x: seeds_to_round(*x) if x[0] and x[1] else 1, axis=1)
 
         pos = df_rename(joined, "W", "L")
         neg = df_rename(joined, "L", "W")
@@ -169,6 +326,25 @@ class MMadnessDataset:
 
         self.combined = pd.concat((pos, neg))
         self.combined["target"] = self.combined["diff"] > 0
+
+        self.combined = pd.merge(
+            self.combined,
+            self.seeds,
+            how="left",
+            left_on=["T1TeamID", "Season"],
+            right_on=["TeamID", "Season"],
+        )
+        self.combined = pd.merge(
+            self.combined,
+            self.seeds,
+            how="left",
+            left_on=["T2TeamID", "Season"],
+            right_on=["TeamID", "Season"],
+            suffixes=("_1", "_2"),
+        )
+        self.combined["T1Seed"] = self.combined["Seed_1"].apply(lambda x: int(x[1:3]))
+        self.combined["T2Seed"] = self.combined["Seed_2"].apply(lambda x: int(x[1:3]))
+        self.combined["round"] = self.combined[["Seed_1", "Seed_2"]].apply(lambda x: seeds_to_round(*x), axis=1)
 
         # now calculate "difference" features for all the core features
 
@@ -194,15 +370,30 @@ class MMadnessDataset:
             specific_df["T1WinsPMEstimate"] = probabilistic_estimate_df(
                 specific_df, self.estimated_score_base, self.estimated_score_scaler
             )
+            specific_df[["EstScoreMean", "EstScoreLower", "EstScoreUpper"]] = score_estimate_df(
+                specific_df, self.estimated_score_base, self.estimated_score_scaler
+            )
+            specific_df["elo21d_diff"] = (
+                specific_df[f"T1EloDelta21Days"] - specific_df[f"T2EloDelta21Days"]
+            )
 
         self.core_features = [
             "T1OD_diff",
             "T2OD_diff",
             "elo1_diff",
             "elo2_diff",
+            "elo21d_diff",
             "T1WinsPMEstimate",
             "poss_eff_diff",
         ]
+
+        self.score_diff_predictor = sklearn.pipeline.Pipeline([
+            ('imputer', sklearn.impute.SimpleImputer()),
+            ('cls', sklearn.ensemble.AdaBoostRegressor())
+            ]
+        )
+        _ = self.score_diff_predictor.fit(self.X[self.core_features], self.reg_y)
+        self.score_preds_test = self.score_diff_predictor.predict(self.X_test[self.core_features])
 
     def get_mask(self, train=True):
         """Return mask of the data based on the holdout and the holdout strategy.
@@ -248,12 +439,33 @@ class MMadnessDataset:
         return self.combined[self.get_mask()].target
 
     @property
+    def sample_weights(self):
+        seasons = self.combined[self.get_mask()].Season.unique()
+        if self.sample_weight_method == "last_3":
+            last_n_seasons = set(sorted(seasons, reverse=True)[:3])
+            return self.combined[self.get_mask()].Season.apply(lambda x: 1 if x in last_n_seasons else 0.5)
+        if self.sample_weight_method == "linear":
+            range = seasons.max() - seasons.min()
+            return  (self.combined[self.get_mask()].Season - seasons.min()) / range + 0.5
+        return None
+
+    @property
     def reg_y(self):
         if self.holdout_seasons is None:
-            return self.combined["diff"].apply(lambda x: np.max([np.min([x, 15]), -15]))
+            return self.combined["diff"].apply(lambda x: np.max([np.min([x, 30]), -30]))
         return self.combined[self.get_mask()]["diff"].apply(
-            lambda x: np.max([np.min([x, 15]), -15])
+            lambda x: np.max([np.min([x, 30]), -30])
         )
+
+    @property
+    def reg_y_log(self):
+
+        if self.holdout_seasons is None:
+            score_diff = self.combined["diff"]
+            return score_diff.apply(lambda x: np.sign(x) * np.log(np.abs(x)))
+        else:
+            score_diff = self.combined[self.get_mask()]["diff"]
+        return score_diff.apply(lambda x: np.sign(x) * np.log(np.abs(x)))
 
     @property
     def X_test(self):
@@ -276,6 +488,13 @@ class MMadnessDataset:
         )
 
     @property
+    def reg_y_test_log(self):
+        if self.holdout_seasons is None:
+            return None
+        score_diff = self.combined[self.get_mask(train=False)]["diff"]
+        return score_diff.apply(lambda x: np.sign(x) * np.log(np.abs(x)))
+
+    @property
     def feature_names(self) -> T.List[str]:
         """return just the columns that constitute our feature representation
 
@@ -295,13 +514,15 @@ class MMadnessDataset:
         return cv.split(self.X, groups=groups)
 
     def get_final_preds(
-        self, model, strategy: str = "last_game"
+        self, model, strategy: str = "last_game", preds: T.Optional[np.ndarray] = None,
     ) -> T.Sequence[pd.DataFrame]:
         if self.holdout_seasons is None:
-            preds = model.predict_proba(self.submission[self.feature_names])[:, 1]
+            if preds is None:
+                preds = model.predict_proba(self.submission[self.feature_names])[:, 1]
             sub = self.submission.copy()
         else:
-            preds = model.predict_proba(self.X_test)[:, 1]
+            if preds is None:
+                preds = model.predict_proba(self.X_test)[:, 1]
             sub = self.combined[self.get_mask(train=False)].copy()
             sub = sub.rename(columns={"T1TeamID": "Team1ID", "T2TeamID": "Team2ID"})
             sub["ID"] = ""
