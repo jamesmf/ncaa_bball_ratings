@@ -194,7 +194,6 @@ class FeatureBase:
 
         df = pd.DataFrame(data, columns=["Season", "TeamID", "col", "rating"])
         df = df.pivot(index=["Season", "TeamID"], columns=["col"])["rating"]
-        print(df.columns)
         return df
 
     def get_elo_adjusted_game_features(self) -> pd.DataFrame:

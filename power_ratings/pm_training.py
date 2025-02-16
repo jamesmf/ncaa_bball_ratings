@@ -1,3 +1,6 @@
+import argparse
+import datetime
+import json
 import typing as T
 import os
 import logging
@@ -15,7 +18,13 @@ from sklearn.linear_model import LinearRegression
 
 from .featurizers import FeatureBase
 from .tournament_dataset import df_rename, feature_rename, probabilistic_estimate_df
-from .constants import M_PRE_SCALER, M_PRE_BASE, W_PRE_SCALER, W_PRE_BASE, OVERTIME_SCORE_BONUS
+from .constants import (
+    M_PRE_SCALER,
+    M_PRE_BASE,
+    W_PRE_SCALER,
+    W_PRE_BASE,
+    OVERTIME_SCORE_BONUS,
+)
 
 logging.basicConfig()
 # some assumptions gleaned from prior data analysis
@@ -26,89 +35,208 @@ logging.basicConfig()
 USE_PREDETERMINED = True
 
 
-def get_season_list():
-    return sorted(list(range(1998, 2024)), reverse=True)
+class PMFeatureGenerator:
 
+    def __init__(
+        self,
+        prefix: T.Literal["M", "W"],
+        max_year: int,
+        base_data_dir: str = "./data",
+        min_year: int = 1998,
+    ):
+        self.prefix = prefix
+        self.max_year = max_year
+        self.min_year = min_year
+        self.data_dir = os.path.join(base_data_dir, str(self.max_year))
+        self.feature_base = FeatureBase(
+            prefix=prefix, start_year=self.min_year, base_path=self.data_dir
+        )
 
-def read_in_data(
-    prefix: str, seasons: T.Optional[T.List[int]] = None, starting_daynum: int = 1
-) -> T.Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def get_season_list(
+        self,
+    ):
+        return sorted(list(range(self.min_year, self.max_year + 1)), reverse=True)
 
-    if seasons is None:
-        seasons = get_season_list()
+    def read_in_data(
+        self,
+        seasons: T.Optional[T.List[int]] = None,
+        starting_daynum: int = 1,
+    ) -> T.Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
-    feature_base = FeatureBase(prefix=prefix)
-    games_df = pd.read_csv(f"./data/{prefix}RegularSeasonCompactResults.csv")
-    teamnames = pd.read_csv(f"data/{prefix}Teams.csv")
-    elo_df = feature_base.elo_features.reset_index()
-    elo_df["elo"] = elo_df["elo_32_day0_True"]
-    elo_df["elo_delta"] = elo_df["elo_32_day30_True_21d_diff"]
+        if seasons is None:
+            seasons = self.get_season_list()
 
-    games_df = games_df[games_df.Season.isin(seasons)]
-    games_df = games_df[games_df.DayNum >= starting_daynum]
-    games_df = pd.merge(
-        games_df,
-        elo_df,
-        how="inner",
-        left_on=["Season", "WTeamID"],
-        right_on=["Season", "TeamID"],
-    )
-    games_df["WTeamID"] = games_df[["Season", "WTeamID"]].apply(
-        lambda x: "_".join([str(v) for v in x]), axis=1
-    )
-    games_df = games_df.rename(
-        columns={
-            "elo": "T1elo",
-            "elo_delta": "T1elo_delta",
-            "WTeamID": "T1TeamID",
-            "WScore": "T1Score",
-            "WLoc": "T1Loc",
+        games_df = pd.read_csv(
+            f"{self.data_dir}/{self.prefix}RegularSeasonCompactResults.csv"
+        )
+        teamnames = pd.read_csv(f"{self.data_dir}/{self.prefix}Teams.csv")
+        elo_df = self.feature_base.elo_features.reset_index()
+        elo_df["elo"] = elo_df["elo_32_day0_True"]
+        elo_df["elo_delta"] = elo_df["elo_32_day30_True_21d_diff"]
+
+        games_df = games_df[games_df.Season.isin(seasons)]
+        games_df = games_df[games_df.DayNum >= starting_daynum]
+        games_df = pd.merge(
+            games_df,
+            elo_df,
+            how="inner",
+            left_on=["Season", "WTeamID"],
+            right_on=["Season", "TeamID"],
+        )
+        games_df["WTeamID"] = games_df[["Season", "WTeamID"]].apply(
+            lambda x: "_".join([str(v) for v in x]), axis=1
+        )
+        games_df = games_df.rename(
+            columns={
+                "elo": "T1elo",
+                "elo_delta": "T1elo_delta",
+                "WTeamID": "T1TeamID",
+                "WScore": "T1Score",
+                "WLoc": "T1Loc",
+            }
+        ).drop(columns=["TeamID"])
+        games_df["T1Wins"] = 1.0
+
+        games_df["T1Home"] = games_df.T1Loc.apply(lambda x: 1 if x == "H" else 0)
+        t2home = games_df.T1Loc.apply(lambda x: 1 if x == "A" else 0).values
+
+        games_df = pd.merge(
+            games_df,
+            elo_df,
+            how="inner",
+            left_on=["Season", "LTeamID"],
+            right_on=["Season", "TeamID"],
+        )
+        games_df["LTeamID"] = games_df[["Season", "LTeamID"]].apply(
+            lambda x: "_".join([str(v) for v in x]), axis=1
+        )
+        games_df = games_df.rename(
+            columns={
+                "elo": "T2elo",
+                "elo_delta": "T2elo_delta",
+                "LTeamID": "T2TeamID",
+                "LScore": "T2Score",
+            }
+        ).drop(columns=["TeamID"])
+
+        renames = {
+            c: "T2" + c[2:] for c in games_df.columns if c[:2] == "T1" and c != "T1Home"
         }
-    ).drop(columns=["TeamID"])
-    games_df["T1Wins"] = 1.0
+        renames.update({c: "T1" + c[2:] for c in games_df.columns if c[:2] == "T2"})
+        inv_games_df = games_df.copy().rename(columns=renames)
+        inv_games_df["T1Wins"] = 0.0
+        inv_games_df["T1Home"] = t2home
+        games_df = pd.concat([games_df, inv_games_df])
+        games_df["ScoreDiff"] = games_df["T1Score"] - games_df["T2Score"]
+        games_df = games_df.drop(columns=["T2Loc", "T2Score"]).reset_index(drop=True)
 
-    games_df["T1Home"] = games_df.T1Loc.apply(lambda x: 1 if x == "H" else 0)
-    t2home = games_df.T1Loc.apply(lambda x: 1 if x == "A" else 0).values
+        games_df = games_df[games_df.NumOT < 2]
+        games_df["T1Score"] = games_df[["T1Score", "NumOT"]].apply(
+            lambda x: x[0] - OVERTIME_SCORE_BONUS * x[1], axis=1
+        )
+        return games_df, elo_df, teamnames
 
-    games_df = pd.merge(
-        games_df,
-        elo_df,
-        how="inner",
-        left_on=["Season", "LTeamID"],
-        right_on=["Season", "TeamID"],
-    )
-    games_df["LTeamID"] = games_df[["Season", "LTeamID"]].apply(
-        lambda x: "_".join([str(v) for v in x]), axis=1
-    )
-    games_df = games_df.rename(
-        columns={
-            "elo": "T2elo",
-            "elo_delta": "T2elo_delta",
-            "LTeamID": "T2TeamID",
-            "LScore": "T2Score",
-        }
-    ).drop(columns=["TeamID"])
+    def train_model_all_years(
+        self,
+        games_df: pd.DataFrame,
+        pre_scaler: float,
+        pre_base: float,
+        seasons: T.Optional[T.List[int]] = None,
+        n_samples: int = 750,
+        n_tune: int = 2500,
+        n_cores: T.Optional[int] = None,
+    ) -> az.data.inference_data.InferenceData:
+        if seasons is None:
+            seasons = self.get_season_list()
 
-    renames = {
-        c: "T2" + c[2:] for c in games_df.columns if c[:2] == "T1" and c != "T1Home"
-    }
-    renames.update({c: "T1" + c[2:] for c in games_df.columns if c[:2] == "T2"})
-    inv_games_df = games_df.copy().rename(columns=renames)
-    inv_games_df["T1Wins"] = 0.0
-    inv_games_df["T1Home"] = t2home
-    games_df = pd.concat([games_df, inv_games_df])
-    games_df["ScoreDiff"] = games_df["T1Score"] - games_df["T2Score"]
-    games_df = games_df.drop(columns=["T2Loc", "T2Score"]).reset_index(drop=True)
+        print(f"training models for: {seasons}")
 
-    games_df = games_df[games_df.NumOT < 2]
-    games_df["T1Score"] = games_df[["T1Score", "NumOT"]].apply(
-        lambda x: x[0] - OVERTIME_SCORE_BONUS * x[1], axis=1
-    )
-    return games_df, elo_df, teamnames
+        full_ratings_df = pd.DataFrame()
+        for year in seasons:
+            if year in games_df.Season.unique():
+                print(f"training model for {year}")
+                # process each year with past years to lower inter-year variance
+                trace = train_model(
+                    games_df[
+                        games_df.Season.isin((year - 3, year - 2, year - 1, year))
+                    ].copy(),
+                    pre_scaler,
+                    pre_base,
+                    n_samples=n_samples,
+                    n_tune=n_tune,
+                    n_cores=n_cores,
+                )
+                ratings_df = get_ratings_df(trace)
+                ratings_df = ratings_df[ratings_df.Season == year]
+                full_ratings_df = pd.concat([full_ratings_df, ratings_df])
+            else:
+                print(
+                    f"skipping training model for {year} because it is not in games_df"
+                )
+
+        return full_ratings_df
+
+    def get_df_for_eff(
+        self,
+    ):
+        data_prefix = f"{self.data_dir}/{self.prefix}"
+        detailed_df = pd.read_csv(f"{data_prefix}RegularSeasonDetailedResults.csv")
+        existing_feature_df = pd.read_csv(
+            f"{data_prefix}_data_interim.csv",
+        ).set_index(["Season", "TeamID"])
+        df_for_eff = pd.merge(
+            detailed_df,
+            feature_rename(existing_feature_df, "W"),
+            how="inner",
+            left_on=["Season", "WTeamID"],
+            right_index=True,
+        )
+
+        df_for_eff = pd.merge(
+            df_for_eff,
+            feature_rename(existing_feature_df, "L"),
+            how="inner",
+            left_on=["Season", "LTeamID"],
+            right_index=True,
+        )
+
+        pos = df_rename(df_for_eff, "W", "L")
+        neg = df_rename(df_for_eff, "L", "W")
+        df_for_eff = pd.concat((pos, neg))
+
+        df_for_eff["ApproxPoss"] = df_for_eff.apply(
+            lambda x: (
+                x["T1FGA"]
+                - x["T1OR"]
+                + x["T1TO"]
+                + 0.475 * x["T1FTA"]
+                + x["T2FGA"]
+                - x["T2OR"]
+                + x["T2TO"]
+                + 0.475 * x["T2FTA"]
+            )
+            / 2,
+            axis=1,
+        )
+        df_for_eff["PossAdjForOT"] = df_for_eff.apply(
+            lambda x: x["ApproxPoss"] - 7.5 * x["NumOT"],
+            axis=1,
+        )
+
+        df_for_eff["T1PtsPerPossEstimate"] = df_for_eff.apply(
+            lambda x: x["T1Score"] / x["ApproxPoss"],
+            axis=1,
+        )
+        return df_for_eff
 
 
 def train_model(
-    games_df: pd.DataFrame, pre_scaler: float, pre_base: float
+    games_df: pd.DataFrame,
+    pre_scaler: float,
+    pre_base: float,
+    n_samples: int = 1000,
+    n_tune: int = 3000,
+    n_cores: T.Optional[int] = None,
 ) -> az.data.inference_data.InferenceData:
     mean_game_score = int(games_df[games_df.NumOT == 0].T1Score.mean())
 
@@ -180,9 +308,9 @@ def train_model(
         #         t1_wins = pm.Bernoulli("t1_wins", p=t1_win_prob, observed=games_df.T1Wins)
 
         trace = pm.sample(
-            750,
-            tune=3000,
-            cores=11,
+            n_samples,
+            tune=n_tune,
+            cores=n_cores if n_cores else os.cpu_count(),
             return_inferencedata=True,
             target_accept=0.9,
         )
@@ -240,38 +368,6 @@ def get_ratings_df(trace: az.data.inference_data.InferenceData) -> pd.DataFrame:
     return ratings_df
 
 
-def train_model_all_years(
-    games_df: pd.DataFrame,
-    pre_scaler: float,
-    pre_base: float,
-    seasons: T.Optional[T.List[int]] = None,
-) -> az.data.inference_data.InferenceData:
-    if seasons is None:
-        seasons = get_season_list()
-
-    print(f"training models for: {seasons}")
-
-    full_ratings_df = pd.DataFrame()
-    for year in seasons:
-        if year in games_df.Season.unique():
-            print(f"training model for {year}")
-            # process each year with past years to lower inter-year variance
-            trace = train_model(
-                games_df[
-                    games_df.Season.isin((year - 3, year - 2, year - 1, year))
-                ].copy(),
-                pre_scaler,
-                pre_base,
-            )
-            ratings_df = get_ratings_df(trace)
-            ratings_df = ratings_df[ratings_df.Season == year]
-            full_ratings_df = pd.concat([full_ratings_df, ratings_df])
-        else:
-            print(f"skipping training model for {year} because it is not in games_df")
-
-    return full_ratings_df
-
-
 def join_datasets(
     full_ratings_df: pd.DataFrame, elo_df: pd.DataFrame, teamnames: pd.DataFrame
 ) -> T.Tuple[pd.DataFrame, pd.DataFrame]:
@@ -316,58 +412,6 @@ def join_datasets(
     for fc in float_cols:
         output_df[fc] = output_df[fc].apply(np.round, args=[1])
     return output_df, joined
-
-
-def get_df_for_eff(prefix: str):
-
-    detailed_df = pd.read_csv(f"./data/{prefix}RegularSeasonDetailedResults.csv")
-    existing_feature_df = pd.read_csv(
-        f"data/{prefix}_data_interim.csv",
-    ).set_index(["Season", "TeamID"])
-    df_for_eff = pd.merge(
-        detailed_df,
-        feature_rename(existing_feature_df, "W"),
-        how="inner",
-        left_on=["Season", "WTeamID"],
-        right_index=True,
-    )
-
-    df_for_eff = pd.merge(
-        df_for_eff,
-        feature_rename(existing_feature_df, "L"),
-        how="inner",
-        left_on=["Season", "LTeamID"],
-        right_index=True,
-    )
-
-    pos = df_rename(df_for_eff, "W", "L")
-    neg = df_rename(df_for_eff, "L", "W")
-    df_for_eff = pd.concat((pos, neg))
-
-    df_for_eff["ApproxPoss"] = df_for_eff.apply(
-        lambda x: (
-            x["T1FGA"]
-            - x["T1OR"]
-            + x["T1TO"]
-            + 0.475 * x["T1FTA"]
-            + x["T2FGA"]
-            - x["T2OR"]
-            + x["T2TO"]
-            + 0.475 * x["T2FTA"]
-        )
-        / 2,
-        axis=1,
-    )
-    df_for_eff["PossAdjForOT"] = df_for_eff.apply(
-        lambda x: x["ApproxPoss"] - 7.5 * x["NumOT"],
-        axis=1,
-    )
-
-    df_for_eff["T1PtsPerPossEstimate"] = df_for_eff.apply(
-        lambda x: x["T1Score"] / x["ApproxPoss"],
-        axis=1,
-    )
-    return df_for_eff
 
 
 def create_pace_feature(df: pd.DataFrame, team_id_map: T.Dict[int, int]):
@@ -524,3 +568,97 @@ def get_full_features(
         suffixes=("_old", ""),
     )
     return new_features
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--max-year", type=int, default=datetime.date.today().year)
+    ap.add_argument("--min-year", type=int, default=1998)
+    args = ap.parse_args()
+
+    mlflow.set_tracking_uri("http://mlflow:5000")
+    mlflow.set_experiment(f"feature-generation-{args.max_year}")
+    mlflow.sklearn.autolog(log_models=False)
+
+    max_season = args.max_year
+    output_feature_names = [
+        "Season",
+        "TeamName",
+        "TeamID",
+        "WP16",
+        "CombinedRating",
+        "OffensiveRating",
+        "DefensiveRating",
+        "EloWithScore",
+        "EloWinLoss",
+        "EloDelta21Days",
+        "PossessionEfficiencyFactor",
+        "TempoEstimate",
+        "ScoreVariance",
+        "EloDay30WithScore",
+        "EloDay30WinLoss",
+    ]
+
+    with open("output/build_data.json", "w") as f:
+        json.dump(
+            {
+                "build_date": datetime.date.today().strftime("%Y-%m-%d"),
+                "data_date": f" - {args.max_year} Season - Day 132",
+            },
+            f,
+        )
+
+    prefixes = ("M", "W")
+    output_features = {}
+    for prefix in prefixes:
+        feature_generator = PMFeatureGenerator(
+            prefix=prefix,
+            max_year=max_season,
+            min_year=args.min_year,
+            base_data_dir="./data/",
+        )
+        # def generate_all_season_features(prefix: str, seasons: T.Optional[T.List[int]], starting_daynum: int=0):
+        games_df, elo_df, teamnames = feature_generator.read_in_data()
+        # print(f"Max DayNum {games_df[games_df.Season == games_df.Season.max()].DayNum.max()}")
+
+        if prefix == "M":
+            pre_scaler = M_PRE_SCALER
+            pre_base = M_PRE_BASE
+        else:
+            pre_scaler = W_PRE_SCALER
+            pre_base = W_PRE_BASE
+        ratings_df = feature_generator.train_model_all_years(
+            games_df,
+            pre_scaler=pre_scaler,
+            pre_base=pre_base,
+            seasons=feature_generator.get_season_list(),
+            n_cores=11,
+        )
+        output, joined = join_datasets(ratings_df, elo_df, teamnames)
+
+        output.to_csv(
+            f"{feature_generator.data_dir}/{prefix}_data_interim.csv", index=False
+        )
+        joined.to_csv(
+            f"{feature_generator.data_dir}/{prefix}_features_interim.csv", index=False
+        )
+
+        df_for_eff = feature_generator.get_df_for_eff()
+        new_features = get_full_features(
+            df_for_eff, output.set_index(["Season", "TeamID"]), prefix
+        )
+        new_features = new_features[output_feature_names]
+        new_features.to_csv(f"output/{prefix}_data_complete.csv", index=False)
+        mlflow.log_artifact(f"output/{prefix}_data_complete.csv")
+        output_features[prefix] = new_features
+
+        orig_df = pd.read_csv(f"output/{prefix}_data_complete.csv")
+        team_df = pd.read_csv(
+            f"{feature_generator.data_dir}/{prefix}Teams.csv",
+            usecols=["TeamName", "TeamID"],
+        )
+        joined = pd.merge(
+            orig_df, team_df, how="inner", on=["TeamName"], suffixes=("", "_y")
+        ).drop(columns=["TeamID_y"])
+        print(joined.shape, orig_df.shape)
+        joined.to_csv(f"output/{prefix}_data_complete.csv", index=False)

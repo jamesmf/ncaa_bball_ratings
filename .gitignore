@@ -6,3 +6,7 @@ archived/
 .mypy_cache/
 mlruns*
 lightning_logs/
+*cleanup.py
+.vscode*
+mlflow.db
+mlartifacts

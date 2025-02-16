@@ -15,6 +15,7 @@ import numpy as np
 
 from .constants import M_PRE_BASE, M_PRE_SCALER, W_PRE_BASE, W_PRE_SCALER
 
+
 def feature_rename(df: pd.DataFrame, wl: str):
     """
     Rename the feature columns based on whether you're joining to the winning or losing team ID
@@ -53,8 +54,9 @@ def prob_t1_score_gt_t2(
     t1_score_mu = (t1_off - t2_def) * scaler + base
     t2_score_mu = (t2_off - t1_def) * scaler + base
     new_mean = t1_score_mu - t2_score_mu
-    new_sigma = np.sqrt(sigma1 ** 2 + sigma2 ** 2)
+    new_sigma = np.sqrt(sigma1**2 + sigma2**2)
     return 1 - scipy.stats.norm.cdf(0, new_mean, new_sigma)
+
 
 def score_sum_distribution(
     t1_off: float,
@@ -74,7 +76,7 @@ def score_sum_distribution(
     t1_score_mu = (t1_off - t2_def) * scaler + base
     t2_score_mu = (t2_off - t1_def) * scaler + base
     new_mean = t1_score_mu + t2_score_mu
-    new_sigma = np.sqrt(sigma1 ** 2 + sigma2 ** 2)
+    new_sigma = np.sqrt(sigma1**2 + sigma2**2)
     return [new_mean, *scipy.stats.norm.interval(0.25, new_mean, new_sigma)]
 
 
@@ -107,6 +109,7 @@ def probabilistic_estimate_df(
         axis=1,
     )
 
+
 def score_estimate_df(
     df: pd.DataFrame,
     base: float,
@@ -122,20 +125,23 @@ def score_estimate_df(
     Returns:
         pd.Series: probabilities
     """
-    result = np.array(df.apply(
-        lambda x: score_sum_distribution(
-            x["T1OffensiveRating"],
-            x["T1DefensiveRating"],
-            x["T2OffensiveRating"],
-            x["T2DefensiveRating"],
-            sigma1=x["T1ScoreVariance"],
-            sigma2=x["T2ScoreVariance"],
-            base=base,
-            scaler=scaler,
-        ),
-        axis=1,
-    ).tolist())
+    result = np.array(
+        df.apply(
+            lambda x: score_sum_distribution(
+                x["T1OffensiveRating"],
+                x["T1DefensiveRating"],
+                x["T2OffensiveRating"],
+                x["T2DefensiveRating"],
+                sigma1=x["T1ScoreVariance"],
+                sigma2=x["T2ScoreVariance"],
+                base=base,
+                scaler=scaler,
+            ),
+            axis=1,
+        ).tolist()
+    )
     return result
+
 
 def seeds_to_round(x1, x2):
     """
@@ -227,17 +233,19 @@ class MMadnessDataset:
         base_path: str = "data/",
         prefix: str = "W",
         start_year: int = 2002,
-        curr_year: int = 2023,
+        curr_year: int = 2024,
         sample_weight_method: T.Literal["last_3", "linear"] = "linear",
         holdout_seasons: T.Optional[T.List[int]] = None,
         extra_features: T.List[str] = [],
         holdout_strategy: str = "all",
     ):
+        self.curr_year = curr_year
         self.holdout_seasons = holdout_seasons
         self.holdout_strategy = holdout_strategy
         self.extra_features = extra_features
         self.sample_weight_method = sample_weight_method
         self.prefix = prefix
+        self.data_dir = os.path.join(base_path, str(self.curr_year))
 
         if prefix == "M":
             self.estimated_score_scaler = M_PRE_SCALER
@@ -247,26 +255,24 @@ class MMadnessDataset:
             self.estimated_score_base = W_PRE_BASE
 
         features_path = os.path.join(base_path, f"../output/{prefix}_data_complete.csv")
-        tourney_path = os.path.join(base_path, f"{prefix}NCAATourneyCompactResults.csv")
-        sub_path = os.path.join(base_path, "SampleSubmission2023.csv")
-        # sub_path = os.path.join(
-        #     base_path, f"{prefix}SampleSubmissionStage{stage_num}.csv"
-        # )
+        print(features_path)
+        tourney_path = os.path.join(
+            self.data_dir, f"{prefix}NCAATourneyCompactResults.csv"
+        )
         seed_path = os.path.join(base_path, f"{prefix}NCAATourneySeeds.csv")
         team_name_path = os.path.join(base_path, f"{prefix}Teams.csv")
 
         self.seeds = pd.read_csv(seed_path)
         self.team_names = pd.read_csv(team_name_path)
+        print(pd.read_csv(features_path).drop_duplicates().columns)
         self.features = (
             pd.read_csv(features_path).drop_duplicates().set_index(["Season", "TeamID"])
         )
+
         self.tourneys = pd.read_csv(tourney_path)
-        self.submission = pd.read_csv(sub_path)[["ID"]]
+        self.submission = self.build_submission_df()
 
         self.tourneys = self.tourneys[self.tourneys.Season >= start_year]
-        self.submission["Season"] = curr_year
-        self.submission["Team1ID"] = self.submission.ID.apply(lambda x: int(x[5:9]))
-        self.submission["Team2ID"] = self.submission.ID.apply(lambda x: int(x[10:14]))
 
         joined = pd.merge(
             self.tourneys,
@@ -316,9 +322,21 @@ class MMadnessDataset:
             right_on=["TeamID", "Season"],
             suffixes=("_1", "_2"),
         )
-        self.submission["T1Seed"] = self.submission["Seed_1"].fillna("").apply(lambda x: int(x[1:3]) if x and str(x) != 'nan' else 17)
-        self.submission["T2Seed"] = self.submission["Seed_2"].fillna("").apply(lambda x: int(x[1:3]) if x and str(x) != 'nan' else 17)
-        self.submission["round"] = self.submission[["Seed_1", "Seed_2"]].fillna("").apply(lambda x: seeds_to_round(*x) if x[0] and x[1] else 1, axis=1)
+        self.submission["T1Seed"] = (
+            self.submission["Seed_1"]
+            .fillna("")
+            .apply(lambda x: int(x[1:3]) if x and str(x) != "nan" else 17)
+        )
+        self.submission["T2Seed"] = (
+            self.submission["Seed_2"]
+            .fillna("")
+            .apply(lambda x: int(x[1:3]) if x and str(x) != "nan" else 17)
+        )
+        self.submission["round"] = (
+            self.submission[["Seed_1", "Seed_2"]]
+            .fillna("")
+            .apply(lambda x: seeds_to_round(*x) if x[0] and x[1] else 1, axis=1)
+        )
 
         pos = df_rename(joined, "W", "L")
         neg = df_rename(joined, "L", "W")
@@ -344,7 +362,9 @@ class MMadnessDataset:
         )
         self.combined["T1Seed"] = self.combined["Seed_1"].apply(lambda x: int(x[1:3]))
         self.combined["T2Seed"] = self.combined["Seed_2"].apply(lambda x: int(x[1:3]))
-        self.combined["round"] = self.combined[["Seed_1", "Seed_2"]].apply(lambda x: seeds_to_round(*x), axis=1)
+        self.combined["round"] = self.combined[["Seed_1", "Seed_2"]].apply(
+            lambda x: seeds_to_round(*x), axis=1
+        )
 
         # now calculate "difference" features for all the core features
 
@@ -365,13 +385,16 @@ class MMadnessDataset:
                 specific_df[f"T1PossessionEfficiencyFactor"]
                 - specific_df[f"T2PossessionEfficiencyFactor"]
             )
+            specific_df["WP16_diff"] = specific_df[f"T1WP16"] - specific_df[f"T2WP16"]
 
             # calculate our game-level "T1 wins" estimate from our probabilistic model
             specific_df["T1WinsPMEstimate"] = probabilistic_estimate_df(
                 specific_df, self.estimated_score_base, self.estimated_score_scaler
             )
-            specific_df[["EstScoreMean", "EstScoreLower", "EstScoreUpper"]] = score_estimate_df(
-                specific_df, self.estimated_score_base, self.estimated_score_scaler
+            specific_df[["EstScoreMean", "EstScoreLower", "EstScoreUpper"]] = (
+                score_estimate_df(
+                    specific_df, self.estimated_score_base, self.estimated_score_scaler
+                )
             )
             specific_df["elo21d_diff"] = (
                 specific_df[f"T1EloDelta21Days"] - specific_df[f"T2EloDelta21Days"]
@@ -385,15 +408,19 @@ class MMadnessDataset:
             "elo21d_diff",
             "T1WinsPMEstimate",
             "poss_eff_diff",
+            "WP16_diff",
         ]
 
-        self.score_diff_predictor = sklearn.pipeline.Pipeline([
-            ('imputer', sklearn.impute.SimpleImputer()),
-            ('cls', sklearn.ensemble.AdaBoostRegressor())
+        self.score_diff_predictor = sklearn.pipeline.Pipeline(
+            [
+                ("imputer", sklearn.impute.SimpleImputer()),
+                ("cls", sklearn.ensemble.AdaBoostRegressor()),
             ]
         )
         _ = self.score_diff_predictor.fit(self.X[self.core_features], self.reg_y)
-        self.score_preds_test = self.score_diff_predictor.predict(self.X_test[self.core_features])
+        self.score_preds_test = self.score_diff_predictor.predict(
+            self.X_test[self.core_features]
+        )
 
     def get_mask(self, train=True):
         """Return mask of the data based on the holdout and the holdout strategy.
@@ -443,10 +470,12 @@ class MMadnessDataset:
         seasons = self.combined[self.get_mask()].Season.unique()
         if self.sample_weight_method == "last_3":
             last_n_seasons = set(sorted(seasons, reverse=True)[:3])
-            return self.combined[self.get_mask()].Season.apply(lambda x: 1 if x in last_n_seasons else 0.5)
+            return self.combined[self.get_mask()].Season.apply(
+                lambda x: 1 if x in last_n_seasons else 0.5
+            )
         if self.sample_weight_method == "linear":
             range = seasons.max() - seasons.min()
-            return  (self.combined[self.get_mask()].Season - seasons.min()) / range + 0.5
+            return (self.combined[self.get_mask()].Season - seasons.min()) / range + 0.5
         return None
 
     @property
@@ -514,7 +543,10 @@ class MMadnessDataset:
         return cv.split(self.X, groups=groups)
 
     def get_final_preds(
-        self, model, strategy: str = "last_game", preds: T.Optional[np.ndarray] = None,
+        self,
+        model,
+        strategy: str = "last_game",
+        preds: T.Optional[np.ndarray] = None,
     ) -> T.Sequence[pd.DataFrame]:
         if self.holdout_seasons is None:
             if preds is None:
@@ -607,3 +639,25 @@ class MMadnessDataset:
         )
         cp = ["ID", "Pred"]
         return strat_1[cp], strat_2[cp], sub
+
+    def build_submission_df(self) -> pd.DataFrame:
+        """
+        build a "submission" dataset for kaggle using the old submission format,
+        which was a handy starting point
+        """
+        teams = pd.read_csv(os.path.join(self.data_dir, f"{self.prefix}Teams.csv"))
+        matchups = [
+            [id1, id2]
+            for id1 in teams.TeamID.values
+            for id2 in teams.TeamID.values
+            if id1 < id2
+        ]
+        matchup_df = pd.DataFrame(matchups, columns=["Team1ID", "Team2ID"])
+        matchup_df["Season"] = int(self.curr_year)
+        matchup_df["ID"] = (
+            matchup_df["Team1ID"]
+            .apply(str)
+            .str.cat(matchup_df["Team2ID"].apply(str), "_")
+        )
+        matchup_df["ID"] = matchup_df["ID"].apply(lambda x: f"{self.curr_year}_{x}")
+        return matchup_df
