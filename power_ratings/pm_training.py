@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pymc as pm
 from scipy.stats import linregress, kendalltau, spearmanr
-from scipy.sparse import csr
+from scipy.sparse import csr_matrix
 from sklearn.linear_model import LinearRegression
 
 
@@ -252,8 +252,16 @@ def train_model(
 
     with pm.Model(coords=coords) as model:
         # constant data
-        t1 = pm.Data("t1", t1_idx, dims="game", mutable=True)
-        t2 = pm.Data("t2", t2_idx, dims="game", mutable=True)
+        t1 = pm.Data(
+            "t1",
+            t1_idx,
+            dims="game",
+        )
+        t2 = pm.Data(
+            "t2",
+            t2_idx,
+            dims="game",
+        )
 
         # keeping this static simplifies other equations, but if ever it
         # needs to be tuned because other variables have changed, uncomment
@@ -441,7 +449,7 @@ def create_pace_feature(df: pd.DataFrame, team_id_map: T.Dict[int, int]):
         data.extend([1, 1])
         y.append(poss_adj)
         n += 1
-    x = csr.csr_matrix((data, (rows, cols)), shape=(n, len(team_id_map)))
+    x = csr_matrix((data, (rows, cols)), shape=(n, len(team_id_map)))
     lr = LinearRegression().fit(x, y)
 
     inv = {v: k for k, v in team_id_map.items()}
@@ -466,7 +474,7 @@ def create_est_pts_per_poss_feature(df: pd.DataFrame, team_id_map: T.Dict[str, i
         data.extend([1, t2def])
         y.append(pts_per_estimate)
         n += 1
-    x = csr.csr_matrix((data, (rows, cols)), shape=(n, n_teams + 1))
+    x = csr_matrix((data, (rows, cols)), shape=(n, n_teams + 1))
     lr = LinearRegression().fit(x, y)
     preds = lr.predict(x)
     r2 = linregress(y, preds).rvalue ** 2
