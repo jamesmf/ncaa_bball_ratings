@@ -9,11 +9,8 @@ WORKDIR /app/ratings/
     # && ./install.sh 
 RUN python -m pip install uv
 
-
-ENV VIRTUAL_ENV=/usr/local/
-
 COPY ./pyproject.toml .
 # RUN 
 
 COPY . .
-RUN uv pip install -e .
+RUN uv pip install --system -e .

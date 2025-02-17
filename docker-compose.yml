@@ -12,12 +12,13 @@ services:
     #       devices:
     #         - driver: nvidia
     #           capabilities: [ gpu ]
-    # environment:
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000/
     # # doesn't seem to work - could investigate JAX backend
     #   - AESARA_FLAGS=device=cuda,floatX=float32
-    ports:
-      - 8888:8888
-    command: python -m notebook --allow-root --ip 0.0.0.0 --no-browser --NotebookApp.token=bballbuddies
+    # ports:
+    #   - 8888:8888
+    # command: python -m notebook --allow-root --ip 0.0.0.0 --no-browser --NotebookApp.token=bballbuddies
   
   mlflow:
     image: ratings:latest
