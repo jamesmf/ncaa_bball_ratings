@@ -95,6 +95,7 @@ if __name__ == "__main__":
     submissions = []
     mlflow.set_tracking_uri("http://mlflow:5000")
     mlflow.set_experiment(f"calibrated-model")
+    mlflow.autolog(disable=True)
     run = mlflow.start_run()
     mlflow.log_param("years", str(args.years))
     for year in args.years:
@@ -141,7 +142,7 @@ if __name__ == "__main__":
 
             base_clf = sklearn.linear_model.LogisticRegression()
             cc = sklearn.calibration.CalibratedClassifierCV(
-                estimator=base_clf, cv=2, ensemble=True, method="isotonic"
+                estimator=base_clf, cv=5, ensemble=True, method="isotonic"
             )
             x = dataset.X[core_cols].values
             preds = cc.fit(x, dataset.y).predict_proba(x)[:, 1]
@@ -161,7 +162,7 @@ if __name__ == "__main__":
 
             base_clf2 = sklearn.linear_model.LogisticRegression()
             cc2 = sklearn.calibration.CalibratedClassifierCV(
-                estimator=base_clf2, cv=2, ensemble=True, method="isotonic"
+                estimator=base_clf2, cv=5, ensemble=True, method="isotonic"
             )
             score_based_preds = cc2.fit(
                 score_preds.reshape(-1, 1), dataset.y

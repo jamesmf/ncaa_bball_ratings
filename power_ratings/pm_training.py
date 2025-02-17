@@ -142,7 +142,7 @@ class PMFeatureGenerator:
         pre_scaler: float,
         pre_base: float,
         seasons: T.Optional[T.List[int]] = None,
-        n_samples: int = 750,
+        n_samples: int = 500,
         n_tune: int = 2500,
         n_cores: T.Optional[int] = None,
     ) -> az.data.inference_data.InferenceData:
@@ -234,8 +234,8 @@ def train_model(
     games_df: pd.DataFrame,
     pre_scaler: float,
     pre_base: float,
-    n_samples: int = 1000,
-    n_tune: int = 3000,
+    n_samples: int = 500,
+    n_tune: int = 2500,
     n_cores: T.Optional[int] = None,
 ) -> az.data.inference_data.InferenceData:
     mean_game_score = int(games_df[games_df.NumOT == 0].T1Score.mean())
@@ -244,7 +244,7 @@ def train_model(
     t1_idx, teams = pd.factorize(games_df["T1TeamID"], sort=True)
     t2_idx, _ = pd.factorize(games_df["T2TeamID"], sort=True)
     game_ids = games_df.index.values
-    # home = games_df.T1Home.values
+    home = games_df.T1Home.values
 
     # shape of this is taken from Rugby Analytics example here:
     # https://oriolabril.github.io/oriol_unraveled/python/arviz/pymc3/xarray/2020/09/22/pymc3-arviz.html
@@ -259,15 +259,17 @@ def train_model(
         # needs to be tuned because other variables have changed, uncomment
         # the Uniform and try another run to get a reasonable value. In past
         # runs, it has remained fairly tight
-        off_def_sigma = 10
-        # off_def_sigma = pm.Uniform("off_def_sigma", lower=7, upper=9)
+        if USE_PREDETERMINED:
+            off_def_sigma = 10
+        else:
+            off_def_sigma = pm.Uniform("off_def_sigma", lower=7, upper=12)
 
         # team_score_sigma_mu = pm.Uniform("team_score_sigma_mu", lower=5, upper=15)
-        team_score_sigma_mu = 9.5
-        team_score_sigma_sigma = 2
+        # team_score_sigma_mu = 9.5
+        # team_score_sigma_sigma = 2
         # team_score_sigma_sigma = pm.Uniform("team_score_sigma_sigma", lower=0.5, upper=10)
         off_def_rank_mu = 50
-        # off_def_rank_mu = pm.Normal("off_def_rank_mu", mu=35, sigma=4)
+        # off_def_rank_mu = pm.Normal("off_def_rank_mu", mu=50, sigma=4)
 
         # team-specific model parameters
         offense = pm.Normal(
@@ -276,17 +278,21 @@ def train_model(
         defense = pm.Normal(
             "defense", mu=off_def_rank_mu, sigma=off_def_sigma, dims="team"
         )
-        team_score_sigma = pm.Normal(
-            "team_score_sigma",
-            mu=team_score_sigma_mu,
-            sigma=team_score_sigma_sigma,
-            dims="team",
+        # team_score_sigma = pm.Normal(
+        #     "team_score_sigma",
+        #     mu=team_score_sigma_mu,
+        #     sigma=team_score_sigma_sigma,
+        #     dims="team",
+        # )
+        team_score_sigma = pm.Uniform(
+            "team_score_sigma", lower=5, upper=15, dims="team"
         )
-        # home_court_adv = pm.Uniform("home_court_adv", lower=2, upper=4)
+        # home_court_adv = pm.Uniform("home_court_adv", lower=2.5, upper=4.5)
+        home_court_adv = 3
 
         if not USE_PREDETERMINED:
-            scaler = pm.Uniform("scaler", lower=0.55, upper=0.7)
-            # base = pm.Uniform("base", lower=mean_game_score -5 , upper=mean_game_score)
+            scaler = pm.Uniform("scaler", lower=0.4, upper=1)
+            # base = pm.Uniform("base", lower=mean_game_score - 5, upper=mean_game_score)
             base = pre_base  # just use it, since it's so consistent
         else:
             scaler = pre_scaler
@@ -294,7 +300,8 @@ def train_model(
 
         # (offense[t1_idx] - defense[t2_idx]) * scaler + base + home_court_adv*home
         t1_score = pm.Deterministic(
-            "score", (offense[t1_idx] - defense[t2_idx]) * scaler + base
+            "score",
+            (offense[t1_idx] - defense[t2_idx]) * scaler + base + home_court_adv * home,
         )
 
         # likelihood of observed data
@@ -319,7 +326,14 @@ def train_model(
 
 def get_ratings_df(trace: az.data.inference_data.InferenceData) -> pd.DataFrame:
     trace_hdi = az.hdi(trace, hdi_prob=0.9)
-    for variable in ("home_court_adv", "off_def_sigma", "scaler", "base"):
+    for variable in (
+        "home_court_adv",
+        "off_def_sigma",
+        "scaler",
+        "base",
+        "team_score_sigma",
+        "off_def_rank_mu",
+    ):
         try:
             print(f"{variable}: {trace_hdi[variable].values}")
         except:
@@ -573,12 +587,12 @@ def get_full_features(
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-year", type=int, default=datetime.date.today().year)
-    ap.add_argument("--min-year", type=int, default=1998)
+    ap.add_argument("--target-season", type=int, required=False)
     args = ap.parse_args()
 
     mlflow.set_tracking_uri("http://mlflow:5000")
     mlflow.set_experiment(f"feature-generation-{args.max_year}")
-    mlflow.sklearn.autolog(log_models=False)
+    mlflow.autolog(disable=True)
 
     max_season = args.max_year
     output_feature_names = [
@@ -614,7 +628,6 @@ if __name__ == "__main__":
         feature_generator = PMFeatureGenerator(
             prefix=prefix,
             max_year=max_season,
-            min_year=args.min_year,
             base_data_dir="./data/",
         )
         # def generate_all_season_features(prefix: str, seasons: T.Optional[T.List[int]], starting_daynum: int=0):
@@ -627,11 +640,16 @@ if __name__ == "__main__":
         else:
             pre_scaler = W_PRE_SCALER
             pre_base = W_PRE_BASE
+        seasons = (
+            [args.target_season]
+            if args.target_season is not None
+            else feature_generator.get_season_list()
+        )
         ratings_df = feature_generator.train_model_all_years(
             games_df,
             pre_scaler=pre_scaler,
             pre_base=pre_base,
-            seasons=feature_generator.get_season_list(),
+            seasons=seasons,
             n_cores=11,
         )
         output, joined = join_datasets(ratings_df, elo_df, teamnames)
